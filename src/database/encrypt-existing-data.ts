@@ -7,10 +7,12 @@ export async function encryptExistingData() {
   await regularClient.connect();
   const db = regularClient.db('testdb1');
   const collection = db.collection('testdb1');
-
+  
   // Fetch all existing documents
   const documents = await collection.find().toArray();
   console.log(`Fetched ${documents.length} documents for encryption.`);
+  await collection.deleteMany({});
+
 
   // Connect to the encrypted client
   const encryptedClient = new mongodb.MongoClient(uri);
@@ -27,91 +29,144 @@ export async function encryptExistingData() {
   const clientEncryption = new mongodb.ClientEncryption(encryptedClient, {
     keyVaultNamespace,
     kmsProviders,
-  }); 
+  });
 
-  const keyId = new mongodb.Binary(Buffer.from(process.env.DATA_KEY_ID, 'base64'), 4);
+  // Create keyId from environment variable
+  let keyId: mongodb.Binary;
+  try {
+    keyId = new mongodb.Binary(Buffer.from(process.env.DATA_KEY_ID, 'base64'), 4);
+  } catch (error) {
+    console.error('Invalid DATA_KEY_ID format:', error.message);
+    throw new Error('Failed to create keyId from DATA_KEY_ID. Ensure it is a valid Base64 string.');
+  }
 
-  // Get the collection for encrypted data
   const encryptedDb = encryptedClient.db('testdb1');
   const encryptedCollection = encryptedDb.collection('testdb1');
 
-  // Clear old unencrypted data in the encrypted collection
-  await encryptedCollection.deleteMany({});
-
+  // Helper function to check if a field is already encrypted
+  function isEncrypted(field: any): boolean {
+    return field instanceof mongodb.Binary && field.sub_type === 6;
+  }
 
   // Encrypt and insert each document
   for (const doc of documents) {
-    doc.bloodGroup = await clientEncryption.encrypt(doc.bloodGroup, {
-      algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
-      keyId,
-    });
-    doc.ethnicity = await clientEncryption.encrypt(doc.ethnicity, {
-      algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
-      keyId,
-    });
-    doc.overallHealth = await clientEncryption.encrypt(doc.overallHealth, {
-      algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
-      keyId,
-    });
-    doc.healthProblems = await Promise.all(
-      doc.healthProblems.map(async (problem: string) =>
-        clientEncryption.encrypt(problem, {
-          algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
-          keyId,
-        })
-      )
-    );
-    doc.familyHistory = await Promise.all(
-      doc.familyHistory.map(async (history: string) =>
-        clientEncryption.encrypt(history, {
-          algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
-          keyId,
-        })
-      )
-    );
-    doc.medications = await Promise.all(
-      doc.medications.map(async (medication: any) => ({
-        name: await clientEncryption.encrypt(medication.name, {
+    try {
+      // Check and encrypt fields
+      if (doc.bloodGroup && !isEncrypted(doc.bloodGroup)) {
+        doc.bloodGroup = await clientEncryption.encrypt(doc.bloodGroup, {
           algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
           keyId,
-        }),
-        dosage: await clientEncryption.encrypt(medication.dosage, {
-          algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
-          keyId,
-        }),
-        status: medication.status, // Boolean doesn't require encryption
-      }))
-    );
-    doc.allergies = await Promise.all(
-      doc.allergies.map(async (allergy: any) => ({
-        allergicTo: await clientEncryption.encrypt(allergy.allergicTo, {
-          algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
-          keyId,
-        }),
-        reaction: await clientEncryption.encrypt(allergy.reaction, {
-          algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
-          keyId,
-        }),
-        stillAllergic: allergy.stillAllergic, // Boolean doesn't require encryption
-      }))
-    );
-    doc.otherFamilyHistories = await Promise.all(
-      doc.otherFamilyHistories.map(async (history: any) => ({
-        relationship: await clientEncryption.encrypt(history.relationship, {
-          algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
-          keyId,
-        }),
-        description: await clientEncryption.encrypt(history.description, {
-          algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
-          keyId,
-        }),
-      }))
-    );
+        });
+      }
 
-    await encryptedCollection.insertOne(doc);
-    console.log(`Encrypted document with _id: ${doc._id}`);
+      if (doc.ethnicity && !isEncrypted(doc.ethnicity)) {
+        doc.ethnicity = await clientEncryption.encrypt(doc.ethnicity, {
+          algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
+          keyId,
+        });
+      }
+
+      if (doc.overallHealth && !isEncrypted(doc.overallHealth)) {
+        doc.overallHealth = await clientEncryption.encrypt(doc.overallHealth, {
+          algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
+          keyId,
+        });
+      }
+
+      if (doc.healthProblems) {
+        doc.healthProblems = await Promise.all(
+          doc.healthProblems.map(async (problem: string) =>
+            isEncrypted(problem)
+              ? problem
+              : clientEncryption.encrypt(problem, {
+                  algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
+                  keyId,
+                })
+          )
+        );
+      }
+
+      if (doc.familyHistory) {
+        doc.familyHistory = await Promise.all(
+          doc.familyHistory.map(async (history: string) =>
+            isEncrypted(history)
+              ? history
+              : clientEncryption.encrypt(history, {
+                  algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
+                  keyId,
+                })
+          )
+        );
+      }
+
+      if (doc.medications) {
+        doc.medications = await Promise.all(
+          doc.medications.map(async (medication: any) => ({
+            name: isEncrypted(medication.name)
+              ? medication.name
+              : await clientEncryption.encrypt(medication.name, {
+                  algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
+                  keyId,
+                }),
+            dosage: isEncrypted(medication.dosage)
+              ? medication.dosage
+              : await clientEncryption.encrypt(medication.dosage, {
+                  algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
+                  keyId,
+                }),
+            status: medication.status, // Boolean doesn't require encryption
+          }))
+        );
+      }
+
+      if (doc.allergies) {
+        doc.allergies = await Promise.all(
+          doc.allergies.map(async (allergy: any) => ({
+            allergicTo: isEncrypted(allergy.allergicTo)
+              ? allergy.allergicTo
+              : await clientEncryption.encrypt(allergy.allergicTo, {
+                  algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
+                  keyId,
+                }),
+            reaction: isEncrypted(allergy.reaction)
+              ? allergy.reaction
+              : await clientEncryption.encrypt(allergy.reaction, {
+                  algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
+                  keyId,
+                }),
+            stillAllergic: allergy.stillAllergic, // Boolean doesn't require encryption
+          }))
+        );
+      }
+
+      if (doc.otherFamilyHistories) {
+        doc.otherFamilyHistories = await Promise.all(
+          doc.otherFamilyHistories.map(async (history: any) => ({
+            relationship: isEncrypted(history.relationship)
+              ? history.relationship
+              : await clientEncryption.encrypt(history.relationship, {
+                  algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
+                  keyId,
+                }),
+            description: isEncrypted(history.description)
+              ? history.description
+              : await clientEncryption.encrypt(history.description, {
+                  algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
+                  keyId,
+                }),
+          }))
+        );
+      }
+
+      // Insert encrypted document into encrypted collection
+      await encryptedCollection.insertOne(doc);
+      console.log(`Encrypted document with _id: ${doc._id}`);
+    } catch (error) {
+      console.error(`Error encrypting document with _id: ${doc._id}:`, error.message);
+    }
   }
 
+  // Close the clients
   await regularClient.close();
   await encryptedClient.close();
 

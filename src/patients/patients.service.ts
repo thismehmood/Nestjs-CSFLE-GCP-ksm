@@ -1,47 +1,40 @@
 import { Injectable } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { Patient } from './patients.interface';
+import { InjectConnection } from '@nestjs/mongoose';
+import { Connection } from 'mongoose';
+import * as mongodb from 'mongodb';
 
 @Injectable()
 export class PatientsService {
-  constructor(@InjectModel('testdb1') private patientModel: Model<Patient>) {}
+  constructor(@InjectConnection() private readonly connection: Connection) {}
 
-  async create(patientData: Patient): Promise<Patient> {
-    const createdPatient = new this.patientModel(patientData);
-    return createdPatient.save();
+  private getClientEncryption() {
+    const kmsProviders = {
+      gcp: {
+        email: process.env.GCP_SERVICE_ACCOUNT_EMAIL,
+        privateKey: process.env.GCP_SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      },
+    };
+
+    return new mongodb.ClientEncryption(this.connection.getClient(), {
+      keyVaultNamespace: 'encryption.__keyVault',
+      kmsProviders,
+    });
   }
 
-  async findAll(): Promise<Patient[]> {
-    return this.patientModel.find().exec();
-  }
+  async queryEncrypted(filter: Record<string, any>) {
+    const clientEncryption = this.getClientEncryption();
+    const keyId = new mongodb.Binary(Buffer.from(process.env.DATA_KEY_ID, 'base64'), 4);
 
-  async findByBloodGroup(height: string): Promise<Patient[]> {
-    const patientData = await this.patientModel.find({ height }).exec();
-    console.log("patientData:", patientData)
-    return patientData;
+    const encryptedFilter: Record<string, any> = {};
+    if (filter.bloodGroup) {
+      encryptedFilter.bloodGroup = await clientEncryption.encrypt(filter.bloodGroup, {
+        algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
+        keyId,
+      });
+    }
+
+    const collection = this.connection.collection('testdb1');
+    const result = await collection.find(encryptedFilter).toArray();
+    return result;
   }
 }
-// import { Injectable } from '@nestjs/common';
-// import { InjectConnection } from '@nestjs/mongoose';
-// import { Connection } from 'mongoose';
-
-// @Injectable()
-// export class PatientsService {
-//   constructor(@InjectConnection() private readonly connection: Connection) {}
-
-//   async encryptExistingData() {
-//     const collection = this.connection.collection('testdb1');
-//     const documents = await collection.find().toArray();
-
-//     for (const doc of documents) {
-//       await collection.replaceOne({ _id: doc._id }, doc);
-//       console.log(`Encrypted document with _id: ${doc._id}`);
-//     }
-//   }
-
-//   async findEncrypted(query: object) {
-//     const collection = this.connection.collection('testdb1');
-//     return await collection.find(query).toArray();
-//   }
-// }
