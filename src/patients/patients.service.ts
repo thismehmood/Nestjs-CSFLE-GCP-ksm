@@ -21,7 +21,8 @@ export class PatientsService {
     });
   }
 
-  async queryEncrypted(filter: Record<string, any>) {
+
+  async queryDecrypted(filter: Record<string, any>) {
     const clientEncryption = this.getClientEncryption();
     const keyId = new mongodb.Binary(Buffer.from(process.env.DATA_KEY_ID, 'base64'), 4);
 
@@ -34,7 +35,26 @@ export class PatientsService {
     }
 
     const collection = this.connection.collection('testdb1');
-    const result = await collection.find(encryptedFilter).toArray();
-    return result;
+    const encryptedDocuments = await collection.find(encryptedFilter).toArray();
+
+    const decryptedDocuments = [];
+    for (const doc of encryptedDocuments) {
+      const decryptedDoc = { ...doc };
+
+      if (decryptedDoc.bloodGroup) {
+        decryptedDoc.bloodGroup = await clientEncryption.decrypt(decryptedDoc.bloodGroup);
+      }
+      if (decryptedDoc.ethnicity) {
+        decryptedDoc.ethnicity = await clientEncryption.decrypt(decryptedDoc.ethnicity);
+      }
+      if (decryptedDoc.overallHealth) {
+        decryptedDoc.overallHealth = await clientEncryption.decrypt(decryptedDoc.overallHealth);
+      }
+
+      decryptedDocuments.push(decryptedDoc);
+    }
+
+    return decryptedDocuments;
   }
 }
+

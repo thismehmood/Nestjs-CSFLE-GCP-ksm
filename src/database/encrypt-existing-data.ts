@@ -8,17 +8,15 @@ export async function encryptExistingData() {
   const db = regularClient.db('testdb1');
   const collection = db.collection('testdb1');
   
-  // Fetch all existing documents
   const documents = await collection.find().toArray();
   console.log(`Fetched ${documents.length} documents for encryption.`);
   await collection.deleteMany({});
 
 
-  // Connect to the encrypted client
+
   const encryptedClient = new mongodb.MongoClient(uri);
   await encryptedClient.connect();
 
-  // Setup ClientEncryption
   const kmsProviders = {
     gcp: {
       email: process.env.GCP_SERVICE_ACCOUNT_EMAIL,
@@ -31,7 +29,6 @@ export async function encryptExistingData() {
     kmsProviders,
   });
 
-  // Create keyId from environment variable
   let keyId: mongodb.Binary;
   try {
     keyId = new mongodb.Binary(Buffer.from(process.env.DATA_KEY_ID, 'base64'), 4);
@@ -43,22 +40,18 @@ export async function encryptExistingData() {
   const encryptedDb = encryptedClient.db('testdb1');
   const encryptedCollection = encryptedDb.collection('testdb1');
 
-  // Helper function to check if a field is already encrypted
   function isEncrypted(field: any): boolean {
     return field instanceof mongodb.Binary && field.sub_type === 6;
   }
 
-  // Encrypt and insert each document
   for (const doc of documents) {
     try {
-      // Check and encrypt fields
       if (doc.bloodGroup && !isEncrypted(doc.bloodGroup)) {
         doc.bloodGroup = await clientEncryption.encrypt(doc.bloodGroup, {
           algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
           keyId,
         });
       }
-
       if (doc.ethnicity && !isEncrypted(doc.ethnicity)) {
         doc.ethnicity = await clientEncryption.encrypt(doc.ethnicity, {
           algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
@@ -114,7 +107,7 @@ export async function encryptExistingData() {
                   algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic',
                   keyId,
                 }),
-            status: medication.status, // Boolean doesn't require encryption
+            status: medication.status,
           }))
         );
       }
@@ -134,7 +127,7 @@ export async function encryptExistingData() {
                   algorithm: 'AEAD_AES_256_CBC_HMAC_SHA_512-Random',
                   keyId,
                 }),
-            stillAllergic: allergy.stillAllergic, // Boolean doesn't require encryption
+            stillAllergic: allergy.stillAllergic,
           }))
         );
       }
@@ -158,7 +151,6 @@ export async function encryptExistingData() {
         );
       }
 
-      // Insert encrypted document into encrypted collection
       await encryptedCollection.insertOne(doc);
       console.log(`Encrypted document with _id: ${doc._id}`);
     } catch (error) {
@@ -166,7 +158,6 @@ export async function encryptExistingData() {
     }
   }
 
-  // Close the clients
   await regularClient.close();
   await encryptedClient.close();
 

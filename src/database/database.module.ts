@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { createEncryptedMongoClient } from './mongo-encryption.config';
-
 @Module({
   imports: [
     MongooseModule.forRootAsync({

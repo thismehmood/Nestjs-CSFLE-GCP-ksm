@@ -5,9 +5,9 @@ import { PatientsService } from './patients.service';
 export class PatientsController {
   constructor(private readonly patientsService: PatientsService) {}
 
-  @Get('search')
-  async searchEncrypted(@Query() query: Record<string, string>) {
-    const result = await this.patientsService.queryEncrypted(query);
+  @Get('search-decrypted')
+  async searchDecrypted(@Query() query: Record<string, string>) {
+    const result = await this.patientsService.queryDecrypted(query);
     return result;
   }
 }
